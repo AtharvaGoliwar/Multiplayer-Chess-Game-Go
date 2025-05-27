@@ -5,12 +5,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 )
@@ -33,6 +35,22 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
+type RegisterRequest struct {
+	Name     string `json:"name"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type LoginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type AuthResponse struct {
+	User    *User  `json:"user"`
+	Message string `json:"message"`
+}
+
 func NewAuthService(db *sql.DB) *AuthService {
 	fmt.Println(os.Getenv("GOOGLE_CLIENT_ID"))
 	return &AuthService{
@@ -46,6 +64,165 @@ func NewAuthService(db *sql.DB) *AuthService {
 		},
 		jwtSecret: []byte(os.Getenv("JWT_SECRET")),
 	}
+}
+
+// Manual Registration
+func (a *AuthService) Register(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req RegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate input
+	if req.Name == "" || req.Email == "" || req.Password == "" {
+		http.Error(w, "Name, email, and password are required", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Password) < 6 {
+		http.Error(w, "Password must be at least 6 characters", http.StatusBadRequest)
+		return
+	}
+
+	// Check if user already exists
+	var existingUserID int
+	err := a.db.QueryRow("SELECT id FROM users WHERE email = $1", req.Email).Scan(&existingUserID)
+	if err == nil {
+		http.Error(w, "User with this email already exists", http.StatusConflict)
+		return
+	} else if err != sql.ErrNoRows {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	// Hash password
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		http.Error(w, "Failed to hash password", http.StatusInternalServerError)
+		return
+	}
+
+	// Create user
+	user := &User{}
+	err = a.db.QueryRow(`
+        INSERT INTO users (email, name, password_hash, updated_at, created_at, google_id)
+        VALUES ($1, $2, $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'notgiven' )
+        RETURNING id, email, name, avatar_url, created_at, updated_at
+    `, req.Email, req.Name, string(hashedPassword)).Scan(
+		&user.ID, &user.Email, &user.Name, &user.CreatedAt, &user.UpdatedAt,
+	)
+
+	if err != nil {
+		log.Fatal(err)
+		http.Error(w, "Failed to create user", http.StatusInternalServerError)
+		return
+	}
+
+	// Generate JWT
+	jwtToken, err := a.generateJWT(user.ID)
+	if err != nil {
+		http.Error(w, "Failed to generate token", http.StatusInternalServerError)
+		return
+	}
+
+	// Set JWT as HTTP-only cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "token",
+		Value:    jwtToken,
+		HttpOnly: true,
+		Secure:   os.Getenv("ENV") == "production",
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   86400 * 7, // 7 days
+		Path:     "/",
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(AuthResponse{
+		User:    user,
+		Message: "Registration successful",
+	})
+}
+
+// Manual Login
+func (a *AuthService) Login(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req LoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate input
+	if req.Email == "" || req.Password == "" {
+		http.Error(w, "Email and password are required", http.StatusBadRequest)
+		return
+	}
+
+	// Get user from database
+	user := &User{}
+	var hashedPassword string
+	err := a.db.QueryRow(`
+        SELECT id, email, name, password_hash, created_at, updated_at
+        FROM users WHERE email = $1 AND password_hash IS NOT NULL
+    `, req.Email).Scan(
+		&user.ID, &user.Email, &user.Name, &hashedPassword, &user.CreatedAt, &user.UpdatedAt,
+	)
+
+	if err == sql.ErrNoRows {
+		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		return
+	} else if err != nil {
+		log.Fatal(err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	// Verify password
+	if err := bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(req.Password)); err != nil {
+		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		return
+	}
+
+	// Update last login time
+	_, err = a.db.Exec("UPDATE users SET updated_at = CURRENT_TIMESTAMP WHERE id = $1", user.ID)
+	if err != nil {
+		// Log error but don't fail the login
+		fmt.Printf("Failed to update last login time: %v\n", err)
+	}
+
+	// Generate JWT
+	jwtToken, err := a.generateJWT(user.ID)
+	if err != nil {
+		http.Error(w, "Failed to generate token", http.StatusInternalServerError)
+		return
+	}
+
+	// Set JWT as HTTP-only cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "token",
+		Value:    jwtToken,
+		HttpOnly: true,
+		Secure:   os.Getenv("ENV") == "production",
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   86400 * 7, // 7 days
+		Path:     "/",
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(AuthResponse{
+		User:    user,
+		Message: "Login successful",
+	})
 }
 
 func (a *AuthService) GoogleLogin(w http.ResponseWriter, r *http.Request) {

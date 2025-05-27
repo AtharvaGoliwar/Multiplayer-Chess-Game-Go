@@ -63,6 +63,8 @@ func main() {
 	r.HandleFunc("/auth/google/callback", authService.GoogleCallback).Methods("GET")
 	r.HandleFunc("/auth/me", authService.GetUser).Methods("GET")
 	r.HandleFunc("/auth/logout", authService.Logout).Methods("POST")
+	r.HandleFunc("/auth/login", authService.Login).Methods("POST")
+	r.HandleFunc("/auth/register", authService.Register).Methods("POST")
 
 	// Game routes
 	r.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
@@ -86,7 +88,7 @@ func main() {
 
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "http://127.0.0.1:5500")
+		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:5173")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		w.Header().Set("Access-Control-Allow-Credentials", "true")

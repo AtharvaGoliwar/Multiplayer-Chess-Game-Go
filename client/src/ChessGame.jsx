@@ -550,7 +550,7 @@
 import React, { useState, useEffect } from "react";
 import { Chessboard } from "react-chessboard";
 import { Chess } from "chess.js";
-import "./ChessGame.css";
+// import "./ChessGame.css";
 
 const formatTime = (seconds) => {
   const m = Math.floor(seconds / 60)
