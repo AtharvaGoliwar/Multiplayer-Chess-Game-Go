@@ -562,48 +562,14 @@ const ChessGame = () => {
         <h2 className="game-title">React Chess Game</h2>
 
         {/* Game controls */}
-        <div
-          // style={{
-          //   marginBottom: "10px",
-          //   display: "flex",
-          //   gap: "10px",
-          //   justifyContent: "center",
-          //   flexWrap: "wrap",
-          // }}
-          className="control-bar"
-        >
-          <button
-            onClick={saveGame}
-            // style={{
-            //   padding: "5px 10px",
-            //   backgroundColor: "#4CAF50",
-            //   color: "white",
-            //   border: "none",
-            //   borderRadius: "3px",
-            //   cursor: "pointer",
-            // }}
-            className="control-btn save-btn"
-          >
+        <div className="control-bar">
+          <button onClick={saveGame} className="control-btn save-btn">
             💾 Save Game
           </button>
-          <button
-            onClick={exportToPGN}
-            // style={{
-            //   padding: "5px 10px",
-            //   backgroundColor: "#2196F3",
-            //   color: "white",
-            //   border: "none",
-            //   borderRadius: "3px",
-            //   cursor: "pointer",
-            // }}
-            className="control-btn export-btn"
-          >
+          <button onClick={exportToPGN} className="control-btn export-btn">
             📄 Export PGN
           </button>
-          <label
-            // style={{ display: "flex", alignItems: "center", gap: "5px" }}
-            className="sound-toggle"
-          >
+          <label className="sound-toggle">
             <input
               type="checkbox"
               checked={soundEnabled}
@@ -625,23 +591,11 @@ const ChessGame = () => {
             style={{ display: "none" }}
             id="pgn-import"
           />
-          <label
-            htmlFor="pgn-import"
-            // style={{
-            //   padding: "5px 10px",
-            //   backgroundColor: "#FF9800",
-            //   color: "white",
-            //   border: "none",
-            //   borderRadius: "3px",
-            //   cursor: "pointer",
-            // }}
-            className="control-btn import-btn"
-          >
+          <label htmlFor="pgn-import" className="control-btn import-btn">
             📁 Import PGN
           </label>
         </div>
 
-        {/* <div style={{ position: "relative", width: "500px", margin: "0 auto" }}> */}
         <div className="chessboard-container">
           <Chessboard
             position={game.fen()}
@@ -659,16 +613,8 @@ const ChessGame = () => {
           />
         </div>
         <div>
-          <div
-            // style={{
-            //   display: "flex",
-            //   justifyContent: "space-around",
-            //   margin: "10px 0",
-            // }}
-            className="timer-display"
-          >
+          <div className="timer-display">
             <div
-              // style={{ color: activeTimer === "w" ? "#000" : "#888" }}
               className={`timer-white ${
                 activeTimer === "w" ? "timer-active" : ""
               }`}
@@ -676,7 +622,6 @@ const ChessGame = () => {
               ♔ White: {formatTime(whiteTime)}
             </div>
             <div
-              // style={{ color: activeTimer === "b" ? "#000" : "#888" }}
               className={`timer-black ${
                 activeTimer === "b" ? "timer-active" : ""
               }`}
@@ -694,23 +639,9 @@ const ChessGame = () => {
             };
 
             return (
-              <div
-                // style={{
-                //   display: "flex",
-                //   justifyContent: "space-between",
-                //   margin: "10px 0",
-                //   padding: "5px 10px",
-                //   // backgroundColor: "#f8f8f8",
-                //   borderRadius: "5px",
-                //   fontSize: "18px",
-                // }}
-                className="captured-pieces"
-              >
+              <div className="captured-pieces">
                 {/* White's captured pieces (Black pieces) */}
-                <div
-                  // style={{ display: "flex", alignItems: "center", gap: "3px" }}
-                  className="captured-side"
-                >
+                <div className="captured-side">
                   {["q", "r", "b", "n", "p"].map((piece) => {
                     const count = captureInfo.whiteCaptured[piece];
                     return (
@@ -746,10 +677,7 @@ const ChessGame = () => {
                 </div>
 
                 {/* Black's captured pieces (White pieces) */}
-                <div
-                  // style={{ display: "flex", alignItems: "center", gap: "3px" }}
-                  className="captured-side"
-                >
+                <div className="captured-side">
                   {captureInfo.blackAdvantage > 0 && (
                     <span
                       style={{
@@ -883,24 +811,9 @@ const ChessGame = () => {
       </div>
 
       {/* Right panel with Move History and Saved Games */}
-      <div
-        // style={{ display: "flex", flexDirection: "column", gap: "20px" }}
-        className="right-panel"
-      >
+      <div className="right-panel">
         {/* Move History Panel */}
-        <div
-          // style={{
-          //   minWidth: "300px",
-          //   maxWidth: "400px",
-          //   border: "1px solid #ccc",
-          //   borderRadius: "8px",
-          //   padding: "15px",
-          //   backgroundColor: "#f9f9f9",
-          //   maxHeight: "400px",
-          //   overflowY: "auto",
-          // }}
-          className="panel move-history-panel"
-        >
+        <div className="panel move-history-panel">
           <h3
             style={{ marginTop: 0, marginBottom: "15px", textAlign: "center" }}
           >
@@ -1040,19 +953,7 @@ const ChessGame = () => {
         </div>
 
         {/* Saved Games Panel */}
-        <div
-          // style={{
-          //   minWidth: "300px",
-          //   maxWidth: "400px",
-          //   border: "1px solid #ccc",
-          //   borderRadius: "8px",
-          //   padding: "15px",
-          //   backgroundColor: "#f9f9f9",
-          //   maxHeight: "300px",
-          //   overflowY: "auto",
-          // }}
-          className="panel saved-games-panel"
-        >
+        <div className="panel saved-games-panel">
           <h3
             style={{ marginTop: 0, marginBottom: "15px", textAlign: "center" }}
           >
