@@ -157,9 +157,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 
-	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -203,6 +203,7 @@ type Message struct {
 	MoveNumber int    `json:"move_number,omitempty"`
 	GameStatus string `json:"game_status,omitempty"`
 	Winner     string `json:"winner,omitempty"`
+	GameID     string `json:"gameid,omitempty"`
 }
 
 func (r *Room) Run() {
@@ -210,6 +211,17 @@ func (r *Room) Run() {
 		select {
 		case client := <-r.Register:
 			r.Clients[client] = true
+
+			// Send current room status to the newly joined client
+			statusMsg := map[string]interface{}{
+				"type":          "room_status",
+				"players_count": len(r.Clients),
+				"message":       "You have joined the room",
+				"ready_to_play": len(r.Clients) == 2,
+			}
+
+			statusBytes, _ := json.Marshal(statusMsg)
+			client.Send <- statusBytes
 
 		case client := <-r.Unregister:
 			if _, ok := r.Clients[client]; ok {
@@ -223,46 +235,144 @@ func (r *Room) Run() {
 				continue
 			}
 
-			switch payload.Type {
-			case "move":
-				// Save move to database
-				gameID, _ := uuid.Parse(r.ID)
-				var playerID int
-				var piece string = "unknown" // You'd parse this from the move
+			r.handleMessage(payload, msg)
 
-				for client := range r.Clients {
-					if client.User.Name == payload.Sender {
-						playerID = client.User.ID
-						break
-					}
-				}
+			// switch payload.Type {
+			// case "move":
+			// 	// Save move to database
+			// 	// gameID, _ := uuid.Parse(r.ID)
+			// 	gameID := r.ID
+			// 	var playerID int
+			// 	var piece string = "unknown" // You'd parse this from the move
 
-				if playerID != 0 {
-					r.gameService.SaveMove(gameID, playerID, payload.From, payload.To, piece, payload.FEN, payload.MoveNumber)
+			// 	for client := range r.Clients {
+			// 		if client.User.Name == payload.Sender {
+			// 			playerID = client.User.ID
+			// 			break
+			// 		}
+			// 	}
 
-					// Update game status if needed
-					if payload.GameStatus != "" {
-						var winner *string
-						if payload.Winner != "" {
-							winner = &payload.Winner
-						}
-						r.gameService.UpdateGame(gameID, payload.FEN, payload.GameStatus, winner)
-					}
-				}
+			// 	if playerID != 0 {
+			// 		r.gameService.SaveMove(gameID, playerID, payload.From, payload.To, piece, payload.FEN, payload.MoveNumber)
 
-				// Broadcast to other players
-				for client := range r.Clients {
-					if client.User.Name != payload.Sender {
-						client.Send <- msg
-					}
-				}
+			// 		// Update game status if needed
+			// 		if payload.GameStatus != "" {
+			// 			var winner *string
+			// 			if payload.Winner != "" {
+			// 				winner = &payload.Winner
+			// 			}
+			// 			r.gameService.UpdateGame(gameID, payload.FEN, payload.GameStatus, winner)
+			// 		}
+			// 	}
 
-			case "chat":
-				// Broadcast chat to all players
-				for client := range r.Clients {
-					client.Send <- msg
-				}
+			// 	// Broadcast to other players
+			// 	for client := range r.Clients {
+			// 		if client.User.Name != payload.Sender {
+			// 			client.Send <- msg
+			// 		}
+			// 	}
+
+			// case "chat":
+			// 	// Broadcast chat to all players
+			// 	for client := range r.Clients {
+			// 		client.Send <- msg
+			// 	}
+			// }
+		}
+	}
+}
+
+func (r *Room) handleMessage(payload Message, originalMsg []byte) {
+	switch payload.Type {
+	case "move":
+		// Save move to database
+		gameID := r.ID
+		var playerID int
+		var piece string = "unknown" // You'd parse this from the move
+
+		for client := range r.Clients {
+			if client.User.Name == payload.Sender {
+				playerID = client.User.ID
+				break
 			}
+		}
+
+		if playerID != 0 {
+			r.gameService.SaveMove(gameID, playerID, payload.From, payload.To, piece, payload.FEN, payload.MoveNumber)
+
+			// Update game status if needed
+			// if payload.GameStatus != "" {
+			// 	var winner *string
+			// 	if payload.Winner != "" {
+			// 		winner = &payload.Winner
+			// 	}
+			// 	// r.gameService.UpdateGame(gameID, payload.FEN, payload.GameStatus, winner)
+			// }
+		}
+
+		// Broadcast to other players
+		for client := range r.Clients {
+			if client.User.Name != payload.Sender {
+				client.Send <- originalMsg
+			}
+		}
+		var raw map[string]interface{}
+		if err := json.Unmarshal(originalMsg, &raw); err != nil {
+			log.Println("Failed to unmarshal original message:", err)
+			return
+		}
+
+		moveData, err := json.Marshal(raw["move"])
+		if err != nil {
+			log.Println("Failed to marshal move field:", err)
+			return
+		}
+		r.gameService.UpdateGame(gameID, payload.GameStatus, payload.Winner, moveData)
+
+	case "chat":
+		// Check if this is a "hello" message and log it
+		if payload.Message == "hello" || payload.Message == "Hello" {
+			// You can add logging here to track hello messages
+			fmt.Printf("Hello message received from %s in room %s. Players in room: %d\n",
+				payload.Sender, r.ID, len(r.Clients))
+		}
+
+		// Broadcast chat to all players
+		for client := range r.Clients {
+			client.Send <- originalMsg
+		}
+
+	case "room_status":
+		// Broadcast room status updates to all clients
+		for client := range r.Clients {
+			client.Send <- originalMsg
+		}
+
+	case "set-active-game":
+		// gameID := r.ID
+
+		for client := range r.Clients {
+			r.gameService.UpdateActiveGameState(client.User.ID, payload.GameID)
+		}
+
+	case "game-over":
+		fmt.Println("works")
+		for client := range r.Clients {
+			r.gameService.UpdateActiveGameState(client.User.ID, " ")
+			client.Send <- originalMsg
+		}
+
+	case "ping":
+		// Handle ping messages to check if both players are active
+		responseMsg := Message{
+			Type:    "pong",
+			Sender:  payload.Sender,
+			Message: fmt.Sprintf("Pong from %s. Room has %d players", payload.Sender, len(r.Clients)),
+		}
+
+		responseBytes, _ := json.Marshal(responseMsg)
+		for client := range r.Clients {
+			client.Send <- responseBytes
 		}
 	}
 }
@@ -273,6 +383,7 @@ var upgrader = websocket.Upgrader{
 
 func ServeWs(hub *Hub, w http.ResponseWriter, r *http.Request, authService *AuthService) {
 	// Authenticate user
+	fmt.Println("Checking the call")
 	user := authService.getUserFromContext(r)
 	if user == nil {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)

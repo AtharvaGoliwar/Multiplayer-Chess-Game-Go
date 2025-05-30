@@ -1,7 +1,8 @@
 import React from "react";
 import ChessGame from "./ChessGame";
 import AuthApp from "./AuthApp";
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route, Navigate } from "react-router-dom";
+import Home from "./Home";
 
 function App() {
   return (
@@ -9,7 +10,9 @@ function App() {
       {/* <ChessGame /> */}
       <Routes>
         <Route path="/" element={<AuthApp />} />
-        <Route path="/home" element={<ChessGame />} />
+        <Route path="/home" element={<Home />} />
+        <Route path="/room/:roomId" element={<ChessGame />} />
+        <Route path="/room" element={<Navigate to="/home" replace />} />
       </Routes>
       {/* <AuthApp /> */}
     </div>

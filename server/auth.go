@@ -111,8 +111,8 @@ func (a *AuthService) Register(w http.ResponseWriter, r *http.Request) {
 	// Create user
 	user := &User{}
 	err = a.db.QueryRow(`
-        INSERT INTO users (email, name, password_hash, updated_at, created_at, google_id)
-        VALUES ($1, $2, $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'notgiven' )
+        INSERT INTO users (email, name, password_hash, updated_at, created_at, google_id, avatar_url)
+        VALUES ($1, $2, $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'notgiven', 'noavatar' )
         RETURNING id, email, name, avatar_url, created_at, updated_at
     `, req.Email, req.Name, string(hashedPassword)).Scan(
 		&user.ID, &user.Email, &user.Name, &user.CreatedAt, &user.UpdatedAt,
@@ -380,9 +380,9 @@ func (a *AuthService) getUserFromContext(r *http.Request) *User {
 	// Try to get token from cookie first
 	cookie, err := r.Cookie("token")
 	var tokenString string
-
 	if err == nil {
 		tokenString = cookie.Value
+		// fmt.Println(tokenString)
 	} else {
 		// Try Authorization header
 		authHeader := r.Header.Get("Authorization")
@@ -404,14 +404,15 @@ func (a *AuthService) getUserFromContext(r *http.Request) *User {
 
 	user := &User{}
 	err = a.db.QueryRow(`
-        SELECT id, google_id, email, name, avatar_url, created_at, updated_at
+        SELECT id, google_id, email, name, avatar_url, created_at, updated_at, active_game
         FROM users WHERE id = $1
     `, claims.UserID).Scan(
 		&user.ID, &user.GoogleID, &user.Email, &user.Name,
-		&user.AvatarURL, &user.CreatedAt, &user.UpdatedAt,
+		&user.AvatarURL, &user.CreatedAt, &user.UpdatedAt, &user.ActiveGame,
 	)
 
 	if err != nil {
+		log.Fatalln(err)
 		return nil
 	}
 

@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Chessboard } from "react-chessboard";
 import { Chess } from "chess.js";
 import "./ChessGame.css";
+import { useNavigate, useParams } from "react-router-dom";
 
 const formatTime = (seconds) => {
   const m = Math.floor(seconds / 60)
@@ -59,8 +60,9 @@ const getCapturedPieces = (game) => {
 };
 
 const ChessGame = () => {
+  const navigate = useNavigate();
   const [game, setGame] = useState(new Chess());
-  const [gameOver, setGameOver] = useState("");
+  const [gameOver, setGameOver] = useState(false);
   const [selectedSquare, setSelectedSquare] = useState(null);
   const [moveSquares, setMoveSquares] = useState({});
   const [promotionDialog, setPromotionDialog] = useState(false);
@@ -86,6 +88,397 @@ const ChessGame = () => {
   const [blackTime, setBlackTime] = useState(initialTime);
   const [activeTimer, setActiveTimer] = useState(null);
   const [soundEnabled, setSoundEnabled] = useState(true);
+
+  // Backend integration state
+  const [isConnected, setIsConnected] = useState(false);
+  const { roomId } = useParams();
+  // console.log(roomId);
+  const [gameId, setGameId] = useState(roomId);
+  const [handleInputGameId, setHandleInputGameId] = useState(null);
+  const [playerColor, setPlayerColor] = useState(null);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [isMoveDone, setIsMoveDone] = useState(false);
+
+  // WebSocket ref
+  const ws = useRef(null);
+  const currentPlayer = useRef(currentUser);
+  const reconnectTimeout = useRef(null);
+
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8080";
+
+  useEffect(() => {
+    currentPlayer.current = currentUser;
+  }, [currentUser]);
+
+  const apiCall = async (endpoint, options = {}) => {
+    const url = `${API_BASE_URL}${endpoint}`;
+    const config = {
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      ...options,
+    };
+
+    if (options.body && typeof options.body === "object") {
+      config.body = JSON.stringify(options.body);
+    }
+
+    const response = await fetch(url, config);
+
+    if (!response.ok) {
+      const errorData = await response
+        .json()
+        .catch(() => ({ message: "Request failed" }));
+      throw new Error(
+        errorData.message || `HTTP error! status: ${response.status}`
+      );
+    }
+
+    return response.json();
+  };
+  const checkAuthStatus = async () => {
+    try {
+      const userData = await apiCall("/auth/me");
+      // setCurrentUser(userData);
+      currentPlayer.current = userData;
+      setPlayerConnected(true);
+    } catch (error) {
+      setCurrentUser(null);
+      setPlayerConnected(false);
+      currentPlayer.current = null;
+    }
+  };
+  useEffect(() => {
+    if (gameId) {
+      console.log("yo 234");
+      checkAuthStatus();
+    }
+  }, []);
+
+  const [tp, setTP] = useState("");
+  useEffect(() => {
+    const func = async () => {
+      if (currentPlayer.current) {
+        const activeGame = currentPlayer.current.active_game;
+        try {
+          let res = await apiCall(`/games/${activeGame}`);
+          // console.log(res);
+          setTP(res);
+        } catch (err) {
+          console.log(err);
+        }
+      }
+    };
+    func();
+  }, [currentPlayer.current]);
+
+  useEffect(() => {
+    if (tp !== "") {
+      if (tp.metadata.length !== 0) {
+        const newGame = new Chess(tp.metadata.fen);
+        setGame(newGame);
+        setWhiteTime(tp.metadata.white_time);
+        setBlackTime(tp.metadata.black_time);
+        // setActiveTimer(newGame.turn());
+      }
+    }
+  }, [tp]);
+
+  useEffect(() => {
+    if (isMoveDone) {
+      setIsMoveDone(false);
+      console.log("sup");
+    }
+  }, [isMoveDone]);
+
+  useEffect(() => {
+    const setActiveGame = () => {
+      if (
+        currentPlayer.current &&
+        currentPlayer.current.active_game !== gameId &&
+        currentPlayer.current.active_game !== "" &&
+        currentPlayer.current.active_game !== " "
+      ) {
+        navigate("/home");
+        console.log(currentPlayer.current.active_game !== " ");
+        return;
+      }
+      if (
+        currentPlayer.current &&
+        (currentPlayer.current.active_game === "" ||
+          currentPlayer.current.active_game === " ") &&
+        gameId &&
+        !gameOver
+      ) {
+        console.log("check for active game");
+        ws.current.send(
+          JSON.stringify({ type: "set-active-game", gameid: gameId })
+        );
+      }
+    };
+    setActiveGame();
+    checkAuthStatus();
+  }, [currentPlayer.current]);
+
+  const checkWebSocketStatus = () => {
+    const state = ws.current?.readyState;
+    const stateText = {
+      0: "CONNECTING",
+      1: "OPEN",
+      2: "CLOSING",
+      3: "CLOSED",
+    };
+    console.log("WebSocket state:", stateText[state] || "UNKNOWN");
+  };
+
+  // WebSocket connection management
+  const connectWebSocket = () => {
+    try {
+      const token = currentPlayer.current;
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const wsUrl = `${protocol}//localhost:8080/ws?room=${gameId}`;
+
+      ws.current = new WebSocket(wsUrl);
+
+      ws.current.onopen = () => {
+        console.log("WebSocket connected");
+        setConnectionStatus("connected");
+        setIsConnected(true);
+
+        // Clear reconnect timeout
+        if (reconnectTimeout.current) {
+          clearTimeout(reconnectTimeout.current);
+          reconnectTimeout.current = null;
+        }
+      };
+
+      ws.current.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          handleWebSocketMessage(message);
+        } catch (error) {
+          console.error("Error parsing WebSocket message:", error);
+        }
+      };
+
+      ws.current.onclose = (event) => {
+        console.log("WebSocket disconnected:", event.code, event.reason);
+        setConnectionStatus("disconnected");
+        setIsConnected(false);
+      };
+
+      ws.current.onerror = (error) => {
+        console.error("WebSocket error:", error);
+        setConnectionStatus("error");
+      };
+    } catch (error) {
+      console.error("Error connecting to WebSocket:", error);
+      setConnectionStatus("error");
+    }
+  };
+
+  // Handle WebSocket messages
+  const handleWebSocketMessage = (message) => {
+    console.log("Received message:", message);
+
+    switch (message.type) {
+      case "init":
+        handleInitState(message);
+        break;
+      case "move":
+        console.log(currentPlayer.current);
+        if (message.playerId !== currentPlayer.current.id) {
+          handleIncomingMove(message.move);
+          setIsMoveDone(true);
+        }
+        break;
+      case "game_sync":
+        // Full game state synchronization
+        syncGameState(message.move);
+        break;
+
+      case "game-over":
+        setGameOver(true);
+        setActiveTimer(null);
+        break;
+      case "error":
+        handleError(message.error);
+        break;
+      default:
+        console.log("Unknown message type:", message.type);
+    }
+  };
+
+  const handleInitState = (message) => {
+    setPlayerColor(message.color);
+  };
+
+  const handleError = (error) => {
+    console.error("Game error:", error);
+    alert(`Error: ${error}`);
+  };
+
+  // Send move to backend
+  const sendMoveToBackend = (moveData) => {
+    if (
+      ws.current &&
+      ws.current.readyState === WebSocket.OPEN &&
+      // isOnlineGame &&
+      gameId
+    ) {
+      console.log("sent");
+      ws.current.send(
+        JSON.stringify({
+          type: "move",
+          gameId: gameId,
+          // playerId: currentUser.id,
+          playerId: currentPlayer.current.id,
+          move: moveData,
+          timestamp: Date.now(),
+        })
+      );
+      setIsMoveDone(true);
+    }
+  };
+
+  // Function to handle incoming moves from backend
+  const handleIncomingMove = (moveData) => {
+    try {
+      const {
+        fen,
+        san,
+        moveHistory: newMoveHistory,
+        gameStates: newGameStates,
+      } = moveData;
+
+      // Create new chess instance with the received FEN
+      const newGame = new Chess(fen);
+
+      // Update all game state
+      setGame(newGame);
+      setMoveHistory(newMoveHistory || []);
+      setGameStates(newGameStates || [fen]);
+      setHistoryIndex((newGameStates?.length || 1) - 1);
+
+      // Clear selection states
+      setSelectedSquare(null);
+      setMoveSquares({});
+
+      // Play sound for opponent's move
+      if (moveData.captured) {
+        playSound("capture");
+      } else if (moveData.san?.includes("O-O")) {
+        playSound("castle");
+      } else {
+        playSound("move");
+      }
+
+      // Check for check
+      if (newGame.inCheck()) {
+        setTimeout(() => playSound("check"), 100);
+      }
+
+      // Check game status
+      const status = getGameStatus(newGame);
+      console.log("status: ", status);
+      if (status) {
+        setGameOver(status);
+        setActiveTimer(null);
+      } else {
+        setActiveTimer(newGame.turn());
+      }
+    } catch (error) {
+      console.error("Error handling incoming move:", error);
+    }
+  };
+
+  const syncGameState = (gameData) => {
+    try {
+      const {
+        fen,
+        moveHistory: newMoveHistory,
+        gameStates: newGameStates,
+        gameOver,
+      } = gameData;
+
+      const newGame = new Chess(fen);
+      setGame(newGame);
+      setMoveHistory(newMoveHistory || []);
+      setGameStates(newGameStates || [fen]);
+      setHistoryIndex((newGameStates?.length || 1) - 1);
+
+      if (gameOver) {
+        console.log("gameOver", gameOver);
+        setGameOver(gameOver);
+        setActiveTimer(null);
+      } else {
+        setActiveTimer(newGame.turn());
+      }
+
+      // Clear selection states
+      setSelectedSquare(null);
+      setMoveSquares({});
+    } catch (error) {
+      console.error("Error syncing game state:", error);
+    }
+  };
+
+  // Request full game synchronization
+  const requestGameSync = () => {
+    if (ws.current && ws.current.readyState === WebSocket.OPEN && gameId) {
+      ws.current.send(
+        JSON.stringify({
+          type: "request_sync",
+          gameId: gameId,
+          playerId: playerId,
+        })
+      );
+    }
+  };
+
+  // Join existing game
+  const joinGame = (gameId) => {
+    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+      ws.current.send(
+        JSON.stringify({
+          type: "join_game",
+          gameId: gameId,
+        })
+      );
+    } else {
+      alert("Not connected to server");
+    }
+  };
+
+  // Initialize WebSocket connection
+  useEffect(() => {
+    if (gameId) {
+      connectWebSocket();
+    }
+    checkWebSocketStatus();
+    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+      ws.current.send(JSON.stringify({ type: "set-active-game" }));
+    }
+    return () => {
+      // Safe cleanup
+      if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+        ws.current.close();
+      }
+
+      // Clear any pending reconnect attempts
+      if (reconnectTimeout.current) {
+        clearTimeout(reconnectTimeout.current);
+        reconnectTimeout.current = null;
+      }
+    };
+  }, [gameId]); // Make sure this only runs once on mount
+
+  useEffect(() => {
+    if (gameOver) {
+      ws.current.send(JSON.stringify({ type: "game-over" }));
+    }
+  }, [gameOver]);
 
   // Sound effects
   const playSound = (type) => {
@@ -150,7 +543,8 @@ const ChessGame = () => {
       if (activeTimer === "w") {
         setWhiteTime((t) => {
           if (t <= 1) {
-            setGameOver("Time's up! Black wins.");
+            // setGameOver("Time's up! Black wins.");
+            setGameOver(true);
             setGameMetadata((prev) => ({ ...prev, result: "0-1" }));
             setActiveTimer(null);
             playSound("gameEnd");
@@ -161,7 +555,8 @@ const ChessGame = () => {
       } else if (activeTimer === "b") {
         setBlackTime((t) => {
           if (t <= 1) {
-            setGameOver("Time's up! White wins.");
+            // setGameOver("Time's up! White wins.");
+            setGameOver(true);
             setGameMetadata((prev) => ({ ...prev, result: "1-0" }));
             setActiveTimer(null);
             playSound("gameEnd");
@@ -232,7 +627,6 @@ const ChessGame = () => {
       const newIndex = historyIndex - 1;
       setGame(new Chess(gameStates[newIndex]));
       setHistoryIndex(newIndex);
-      setGameOver("");
       setGameMetadata((prev) => ({ ...prev, result: "*" }));
     }
   };
@@ -242,7 +636,6 @@ const ChessGame = () => {
       const newIndex = historyIndex + 1;
       setGame(new Chess(gameStates[newIndex]));
       setHistoryIndex(newIndex);
-      setGameOver("");
     }
   };
 
@@ -269,6 +662,7 @@ const ChessGame = () => {
 
       setGameMetadata((prev) => ({ ...prev, result }));
       playSound("gameEnd");
+      setGameOver(true);
       return message;
     }
     return "";
@@ -289,10 +683,25 @@ const ChessGame = () => {
   };
 
   const makeMove = ({ from, to, promotion }) => {
+    console.log(game.turn());
     if (historyIndex !== gameStates.length - 1) return;
-
+    if (game.turn() !== playerColor[0]) return;
     updateGame((g) => {
       const moveResult = g.move({ from, to, promotion });
+      if (moveResult) {
+        console.log("sending");
+        sendMoveToBackend({
+          from,
+          to,
+          promotion,
+          fen: g.fen(), // Send the resulting FEN
+          san: moveResult.san, // Send algebraic notation
+          moveHistory: [...moveHistory, moveResult.san],
+          gameStates: [...gameStates, g.fen()],
+          white_time: whiteTime,
+          black_time: blackTime,
+        });
+      }
       const status = getGameStatus(g);
       if (status) {
         setGameOver(status);
@@ -306,7 +715,7 @@ const ChessGame = () => {
 
   const onSquareClick = (square) => {
     if (promotionDialog || historyIndex !== gameStates.length - 1) return;
-
+    if (game.turn() !== playerColor[0]) return;
     const piece = game.get(square);
     if (piece && piece.color === game.turn()) {
       if (square === selectedSquare) {
@@ -376,7 +785,7 @@ const ChessGame = () => {
 
   const restartGame = () => {
     setGame(new Chess());
-    setGameOver("");
+    setGameOver(false);
     setSelectedSquare(null);
     setMoveSquares({});
     setPendingPromotion(null);
@@ -503,7 +912,7 @@ const ChessGame = () => {
         setMoveHistory(history);
         setGameStates(states);
         setHistoryIndex(states.length - 1);
-        setGameOver("");
+        setGameOver(false);
 
         // Extract metadata from PGN headers
         const headerRegex = /\[(\w+)\s+"([^"]+)"\]/g;
@@ -533,7 +942,6 @@ const ChessGame = () => {
     if (targetIndex >= 0 && targetIndex < gameStates.length) {
       setGame(new Chess(gameStates[targetIndex]));
       setHistoryIndex(targetIndex);
-      setGameOver("");
     }
   };
 
@@ -558,6 +966,11 @@ const ChessGame = () => {
   return (
     <div className="chess-game-container">
       {/* Main game area */}
+      {/* {console.log(currentUser)} */}
+      {/* {console.log(currentPlayer.current)} */}
+      {/* {console.log("Opponent: ", opponent)} */}
+      {/* {console.log("Player color: ", playerColor)} */}
+      {console.log(tp)}
       <div className="main-game-section">
         <h2 className="game-title">React Chess Game</h2>
 
@@ -1032,6 +1445,19 @@ const ChessGame = () => {
               ))}
             </div>
           )}
+        </div>
+        {/* Game ID */}
+        <div>
+          <input
+            type="text"
+            onChange={(e) => {
+              setHandleInputGameId(e.target.value);
+            }}
+          />
+          <button onClick={() => setGameId(handleInputGameId)}>Submit</button>
+        </div>
+        <div>
+          <button onClick={() => setGameOver(true)}>resign</button>
         </div>
       </div>
     </div>

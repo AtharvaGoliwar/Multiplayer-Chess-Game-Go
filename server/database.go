@@ -36,7 +36,7 @@ func createTables(db *sql.DB) error {
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )`,
 		`CREATE TABLE IF NOT EXISTS games (
-            id UUID PRIMARY KEY,
+            id varchar(255) PRIMARY KEY,
             white_player_id INTEGER REFERENCES users(id),
             black_player_id INTEGER REFERENCES users(id),
             current_fen VARCHAR(500) DEFAULT 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
@@ -47,7 +47,7 @@ func createTables(db *sql.DB) error {
         )`,
 		`CREATE TABLE IF NOT EXISTS game_moves (
             id SERIAL PRIMARY KEY,
-            game_id UUID REFERENCES games(id),
+            game_id varchar(255) REFERENCES games(id),
             player_id INTEGER REFERENCES users(id),
             move_from VARCHAR(2) NOT NULL,
             move_to VARCHAR(2) NOT NULL,

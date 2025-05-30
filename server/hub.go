@@ -69,8 +69,9 @@ package main
 
 import (
 	"database/sql"
-
-	"github.com/google/uuid"
+	"encoding/json"
+	"fmt"
+	"log"
 )
 
 type Hub struct {
@@ -112,21 +113,28 @@ func (h *Hub) Run() {
 				continue
 			}
 
+			playersBeforeJoin := len(room.Clients)
+
 			// Load or create game
-			gameID, err := uuid.Parse(client.RoomID)
+			// gameID, err := uuid.Parse(client.RoomID)
+			// var gameID string
+			gameID := client.RoomID
+			fmt.Println(gameID)
+			_, err := h.gameService.GetGame(gameID)
 			if err != nil {
 				// Create new game
-				game, err := h.gameService.CreateGame(client.User.ID)
+				game, err := h.gameService.CreateGame(client.User.ID, gameID)
 				if err != nil {
 					client.Conn.WriteJSON(map[string]string{
 						"type":    "error",
 						"message": "Failed to create game",
 					})
+					log.Fatalln(err)
 					client.Conn.Close()
 					continue
 				}
 				gameID = game.ID
-				client.RoomID = gameID.String()
+				client.RoomID = gameID
 			} else {
 				// Try to join existing game
 				if len(room.Clients) == 1 {
@@ -172,11 +180,76 @@ func (h *Hub) Run() {
 
 			room.Register <- client
 
+			// If this is the second player joining, send notifications
+			if playersBeforeJoin == 1 && len(room.Clients) == 2 {
+				// Send room status update to all clients
+				roomStatusMsg := map[string]interface{}{
+					"type":          "room_status",
+					"players_count": 2,
+					"message":       "Both players have joined the game!",
+					"ready_to_play": true,
+				}
+
+				statusBytes, _ := json.Marshal(roomStatusMsg)
+				room.Broadcast <- statusBytes
+
+				// Send automatic "hello" message from the newly joined player
+				helloMsg := Message{
+					Type:   "chat",
+					Sender: fmt.Sprintf("%d", client.User.ID),
+					// Message: "Hello! I've joined the game. Ready to play?",
+					Message: "Hello",
+				}
+
+				helloBytes, _ := json.Marshal(helloMsg)
+				room.Broadcast <- helloBytes
+			}
+
 		case client := <-h.Unregister:
 			if room, ok := h.Rooms[client.RoomID]; ok {
 				room.Unregister <- client
+
+				err1 := h.gameService.setDisconnectionTime(client.User.ID)
+				if err1 != nil {
+					fmt.Print(err1)
+					client.Conn.WriteJSON(map[string]string{
+						"type":    "error",
+						"message": "Update disconnection time failed",
+					})
+				}
+				// Send notification when a player leaves
+				if len(room.Clients) > 0 {
+					leaveMsg := map[string]interface{}{
+						"type":          "room_status",
+						"players_count": len(room.Clients) - 1, // -1 because client hasn't been removed yet
+						"message":       fmt.Sprintf("%d has left the game", client.User.ID),
+						"ready_to_play": false,
+					}
+
+					leaveBytes, _ := json.Marshal(leaveMsg)
+					room.Broadcast <- leaveBytes
+				}
+
 				if len(room.Clients) == 0 {
 					delete(h.Rooms, client.RoomID)
+					err := h.gameService.DeleteGame(client.RoomID)
+					if err != nil {
+						fmt.Print(err)
+						client.Conn.WriteJSON(map[string]string{
+							"type":    "error",
+							"message": "Game deletion failed",
+						})
+						client.Conn.Close()
+						continue
+					} else {
+						fmt.Println("gg")
+						client.Conn.WriteJSON(map[string]string{
+							"type":    "game-destroy",
+							"message": "Game room deleted successfully",
+						})
+						h.gameService.UpdateActiveGameState(client.User.ID, " ")
+					}
+
 				}
 			}
 		}
